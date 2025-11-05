@@ -6,6 +6,7 @@ use http::{Method, Request, Response, header::ALLOW};
 use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
+use tower::util::BoxCloneService;
 
 use super::session::SessionManager;
 use crate::{
@@ -27,12 +28,47 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
+pub type MiddlewareFn = Box<
+    dyn Fn(
+            tower::util::BoxCloneService<
+                http::Request<
+                    http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+                >,
+                http::Response<
+                    http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+                >,
+                std::convert::Infallible,
+            >,
+        ) -> tower::util::BoxCloneService<
+            http::Request<
+                http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+            >,
+            http::Response<
+                http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+            >,
+            std::convert::Infallible,
+        > + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
 pub struct StreamableHttpServerConfig {
     /// The ping message duration for SSE connections.
     pub sse_keep_alive: Option<Duration>,
     /// If true, the server will create a session for each request and keep it alive.
     pub stateful_mode: bool,
+    /// Middleware functions to apply to the service
+    pub middlewares: Option<std::sync::Arc<Vec<MiddlewareFn>>>,
+}
+
+impl std::fmt::Debug for StreamableHttpServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamableHttpServerConfig")
+            .field("sse_keep_alive", &self.sse_keep_alive)
+            .field("stateful_mode", &self.stateful_mode)
+            .field("middlewares", &"<middleware omitted>")
+            .finish()
+    }
 }
 
 impl Default for StreamableHttpServerConfig {
@@ -40,6 +76,7 @@ impl Default for StreamableHttpServerConfig {
         Self {
             sse_keep_alive: Some(Duration::from_secs(15)),
             stateful_mode: true,
+            middlewares: None,
         }
     }
 }

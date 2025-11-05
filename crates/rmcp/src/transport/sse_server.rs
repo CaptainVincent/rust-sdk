@@ -10,6 +10,8 @@ use axum::{
     },
     routing::{get, post},
 };
+
+pub type MiddlewareFn = Box<dyn Fn(Router) -> Router + Send + Sync>;
 use futures::{Sink, SinkExt, Stream};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
@@ -214,13 +216,27 @@ impl Stream for SseServerTransport {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SseServerConfig {
     pub bind: SocketAddr,
     pub sse_path: String,
     pub post_path: String,
     pub ct: CancellationToken,
     pub sse_keep_alive: Option<Duration>,
+    pub middlewares: Option<Arc<Vec<MiddlewareFn>>>,
+}
+
+impl std::fmt::Debug for SseServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SseServerConfig")
+            .field("bind", &self.bind)
+            .field("sse_path", &self.sse_path)
+            .field("post_path", &self.post_path)
+            .field("ct", &"<CancellationToken>")
+            .field("sse_keep_alive", &self.sse_keep_alive)
+            .field("middlewares", &"<middleware omitted>")
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -237,6 +253,7 @@ impl SseServer {
             post_path: "/message".to_string(),
             ct: CancellationToken::new(),
             sse_keep_alive: None,
+            middlewares: None,
         })
         .await
     }
@@ -264,10 +281,21 @@ impl SseServer {
             config.post_path.clone(),
             config.sse_keep_alive.unwrap_or(DEFAULT_AUTO_PING_INTERVAL),
         );
-        let router = Router::new()
-            .route(&config.sse_path, get(sse_handler))
-            .route(&config.post_path, post(post_event_handler))
-            .with_state(app);
+        let router = {
+            let mut router = Router::new()
+                .route(&config.sse_path, get(sse_handler))
+                .route(&config.post_path, post(post_event_handler))
+                .with_state(app);
+
+            // Apply middlewares if provided
+            if let Some(middlewares) = &config.middlewares {
+                for middleware in middlewares.iter() {
+                    router = middleware(router);
+                }
+            }
+
+            router
+        };
 
         let server = SseServer {
             transport_rx,
